@@ -1,0 +1,266 @@
+# US Census Exercise
+========================================================
+Libraries and functions needed throughout the assignment
+```{r message=FALSE}
+library("ggplot2")
+library("caret")
+library("randomForest")
+library("tabplot")
+
+# Multiple plot function 
+# http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+# 
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+## Import and explore the data
+
+Read in the learning dataset:
+```{r}
+Sys.setlocale('LC_ALL','C') # because some strings are invalid in the default locale
+census_learn <- read.csv("us_census_full/census_income_learn.csv", header=F) # set path accordingly
+summary(census_learn)
+```
+"?" = missing data  
+Throughout this assignment, I didn't impute any missing data.  
+"Not in universe" = When to include, when not? For example: 
+```{r}
+# working class
+summary(census_learn$V2) # working class
+sum(census_learn$V1<10) # younger than 10; they probably never worked  
+```
+In practice, I'd try to get to know more about these cases (in this case I couldn't open the [link](http://www.bls.census.gov/cps/cpsmain.htm)). Here, for simplicity, I just keep it.
+
+V25 seems to be *instance weight*
+```{r}
+census_learn <- census_learn[, -25]
+colnames(census_learn) <- c('age', 'work_class', 'industry','occupation', 'education', 'wage_ph', 'enroll_edu', 'm_stat', 'industry_major', 'occupation_major', 'race', 'hispanic', 'sex', 'union_member', 'unemployment', 'employment_stat', 'capital_gains', 'capital_losses', 'dividends', 'tax_stat', 'ex_region', 'ex_state', 'household_stat', 'household_summary', 'change_msa', 'change_reg', 'within_reg', 'live_1ya', 'mig_sun', 'for_employer', 'family_und18', 'cob_dad', 'cob_mom', 'cob', 'citizenship', 'own_bus', 'veterans_quest', 'veterans_bnfts', 'weeks', 'year', 'income')
+```
+
+**Quick visualisation**
+```{r}
+# Our missing data will be denoted in the legend as "?"
+# I don't like these plots, I don't find them intuitive to interpret but I didn't know how to quickly visualise %missing data. I could've done the same visualisation as for the cleaned dataset, tho.
+
+p <- tablePrepare(census_learn)
+for(i in 1:floor(length(census_learn)/5)){
+  print(tableplot(p, select=(i*5-4):(i*5)))
+}
+tableplot(p, select=(length(census_learn)-length(census_learn)%%5 + 1):length(census_learn))
+```
+
+```{r}
+# grep -v "?" census_income_learn.csv > census_income_learn_nomiss.csv
+census_learn_clean <- read.csv("us_census_full/census_income_learn_nomiss.csv", header=F) 
+# fraction of the original dataset that remained
+length(census_learn_clean)/length(census_learn)
+summary(census_learn_clean)
+# V16 (employment_stat) and V41 (year) the same for all people in the dataset
+```
+
+
+```{r}
+census_learn_clean <- census_learn_clean[, -25]
+colnames(census_learn_clean) <- c('age', 'work_class', 'industry','occupation', 'education', 'wage_ph', 'enroll_edu', 'm_stat', 'industry_major', 'occupation_major', 'race', 'hispanic', 'sex', 'union_member', 'unemployment', 'employment_stat', 'capital_gains', 'capital_losses', 'dividends', 'tax_stat', 'ex_region', 'ex_state', 'household_stat', 'household_summary', 'change_msa', 'change_reg', 'within_reg', 'live_1ya', 'mig_sun', 'for_employer', 'family_und18', 'cob_dad', 'cob_mom', 'cob', 'citizenship', 'own_bus', 'veterans_quest', 'veterans_bnfts', 'weeks', 'year', 'income')
+```
+
+```{r}
+sum(sapply(census_learn_clean, is.factor))
+# although was obvious from "year"
+# factorising...
+cont <- c(1, 6, 17, 18, 19, 30, 39)
+nominal <- (1:41)[-cont]
+census_learn_clean[, nominal] <- lapply(census_learn_clean[, nominal], as.factor)
+```
+
+### Exploring continuous attributes
+#### Age
+```{r}
+tmp <- stack(data.frame(census_learn_clean[,1]))
+p1 <- ggplot(tmp, aes(x = ind, y = tmp$values)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(outlier.size = 3) + labs(x = "All", y = "Age") + theme_bw()
+p2 <- ggplot(tmp, aes(tmp$values)) + geom_histogram(binwidth = 10) + theme_bw() + labs(x = "Age", y = "Count") 
+p3 <- ggplot(census_learn_clean, aes(x = income, y = age, fill = income)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(alpha = 0.2, outlier.size = 3) + labs(x = "Income", y = "Age") + theme_bw()
+p4 <- ggplot(census_learn_clean, aes(x = age, color = income, fill = income)) + geom_histogram(binwidth = 10, alpha = 0.2, position="identity") + labs(x = "Age", y = "Count") + theme_bw()
+
+multiplot(p1, p3, p2, p4, cols = 2)
+```
+
+#### Wage per hour
+```{r}
+tmp <- stack(data.frame(census_learn_clean[,6]))
+p1 <- ggplot(tmp, aes(x = ind, y = tmp$values)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(outlier.size = 3) + labs(x = "All", y = "Wage per hour") + theme_bw()
+p2 <- ggplot(tmp, aes(tmp$values)) + geom_histogram(binwidth = 100) + labs(x = "Wage per hour", y= "Count") + theme_bw()
+p3 <- ggplot(census_learn_clean, aes(x = income, y = wage_ph, fill = income)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(alpha = 0.2, outlier.size = 3) + labs(x = "Income", y = "Wage per hour") + theme_bw()
+p4 <- ggplot(census_learn_clean, aes(x = wage_ph, color = income, fill = income)) +
+geom_histogram(binwidth = 100, alpha = 0.2, position="identity") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme_bw() + labs(x = "Wage per hour", y = "Count") 
+multiplot(p1, p3, p2, p4, cols=2)
+```
+
+```{r}
+sum(census_learn_clean[,6]==0)/length(census_learn_clean[,6])
+```
+Don't include in the model; > 94% earn 0$ per hour, could be missing data
+
+#### Capital gains
+```{r}
+tmp <- stack(data.frame(census_learn_clean[,17]))
+p1 <- ggplot(tmp, aes(x = ind, y = tmp$values)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(outlier.size = 3) + labs(x = "All", y = "Capital gains") + theme_bw()
+p2 <- ggplot(tmp, aes(tmp$values)) + geom_histogram(binwidth = 100) + labs(x = "Capital gains", y = "Count") + theme_bw()
+p3 <- ggplot(census_learn_clean, aes(x = income, y = capital_gains, fill = income)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(alpha = 0.2, outlier.size = 3) + labs(x = "Income", y = "Capital gains") + theme_bw()
+p4 <- ggplot(census_learn_clean, aes(x = capital_gains, color = income, fill = income)) +
+geom_histogram(binwidth = 100, alpha = 0.2, position="identity") + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))  + labs(x = "Capital gains", y = "Count") 
+multiplot(p1, p3, p2, p4, cols=2)
+```
+```{r}
+sum(census_learn_clean[,17]==0)/length(census_learn_clean[,17])
+```
+Similar as above... Don't include in the model; > 96% have 0 capital gains
+
+#### Capital losses
+```{r}
+tmp <- stack(data.frame(census_learn_clean[,18]))
+p1 <- ggplot(tmp, aes(x = ind, y = tmp$values)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(outlier.size = 3) + labs(x = "All", y = "Capital losses") + theme_bw()
+p2 <- ggplot(tmp, aes(tmp$values)) + geom_histogram(binwidth = 100) + labs(x = "Capital losses", y = "Count") + theme_bw()
+p3 <- ggplot(census_learn_clean, aes(x = income, y = capital_losses, fill = income)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(alpha = 0.2, outlier.size = 3) + labs(x = "Income", y = "Capital losses") + theme_bw()
+p4 <- ggplot(census_learn_clean, aes(x = capital_losses, color = income, fill = income)) +
+geom_histogram(binwidth = 100, alpha = 0.2, position="identity") + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(x = "Capital losses", y = "Count") 
+multiplot(p1, p3, p2, p4, cols=2)
+```
+```{r}
+sum(census_learn_clean[,18]==0)/length(census_learn_clean[,18])
+```
+Similar as above... Don't include in the model; > 98% have 0 capital losses
+
+#### Dividents from stocks
+```{r}
+tmp <- stack(data.frame(census_learn_clean[,19]))
+p1 <- ggplot(tmp, aes(x = ind, y = tmp$values)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(outlier.size = 3) + labs(x = "All", y = "Dividends") + theme_bw()
+p2 <- ggplot(tmp, aes(tmp$values)) + geom_histogram(binwidth = 100) + labs(x = "Dividends", y = "Count") + theme_bw()
+p3 <- ggplot(census_learn_clean, aes(x = income, y = dividends, fill = income)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(alpha = 0.2, outlier.size = 3) + labs(x = "Income", y = "Dividends") + theme_bw()
+p4 <- ggplot(census_learn_clean, aes(x = dividends, color = income, fill = income)) + geom_histogram(binwidth = 100, alpha = 0.2, position="identity") + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(x = "Dividends", y = "Count")
+multiplot(p1, p3, p2, p4, cols=2)
+```
+```{r}
+sum(census_learn_clean[,19]==0)/length(census_learn_clean[,19])
+```
+Similar as above... Don't include in the model; > 89% have 0 dividends from stocks
+
+#### Number of persons worked for employer
+```{r}
+tmp <- stack(data.frame(census_learn_clean[,30]))
+p1 <- ggplot(tmp, aes(x = ind, y = tmp$values)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(outlier.size = 3) + labs(x = "All", y = "#persons") + theme_bw()
+p2 <- ggplot(tmp, aes(tmp$values)) + geom_histogram(binwidth = 1) + labs(x = "#persons", y = "Count") + theme_bw()
+p3 <- ggplot(census_learn_clean, aes(x = income, y = for_employer, fill = income)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(alpha = 0.2, outlier.size = 3) + labs(x = "Income", y = "#persons") + theme_bw()
+p4 <- ggplot(census_learn_clean, aes(x = for_employer, color = income, fill = income)) + geom_histogram(binwidth = 1, alpha = 0.2, position="identity") + labs(x = "#persons", y = "Count") + theme_bw()
+multiplot(p1, p3, p2, p4, cols=2)
+```
+
+#### Weeks worked in a year
+```{r}
+tmp <- stack(data.frame(census_learn_clean[,39]))
+p1 <- ggplot(tmp, aes(x = ind, y = tmp$values)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(outlier.size = 3) + labs(x = "All", y = "#weeks") + theme_bw()
+p2 <- ggplot(tmp, aes(tmp$values)) + geom_histogram(binwidth = 5) + labs(x = "#weeks", y = "Count") + theme_bw()
+p3 <- ggplot(census_learn_clean, aes(x = income, y = weeks, fill = income)) + stat_boxplot(geom = 'errorbar') + geom_boxplot(alpha = 0.2, outlier.size = 3) + labs(x = "Income", y = "#weeks") + theme_bw()
+p4 <- ggplot(census_learn_clean, aes(x = weeks, color = income, fill = income)) + geom_histogram(binwidth = 5, alpha = 0.2, position="identity") + labs(x = "#weeks", y = "Count") + theme_bw()
+multiplot(p1, p3, p2, p4, cols=2)
+```
+
+### Exploring nominal variables
+
+```{r}
+for(i in 1:length(nominal)){
+print(ggplot(census_learn_clean, aes(factor(census_learn_clean[,nominal[i]]), fill=factor(income))) + theme_bw() + geom_bar(aes(y=..count../sum(..count..))) + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(x = colnames(census_learn_clean)[nominal[i]], y = "Percent"))
+}
+```
+
+## Modelling the data
+```{r}
+# age, for_employer, weeks
+# work_class, occupation, education, m_stat, race, sex, citizenship
+```
+
+### Logistic regression
+```{r}
+model_glm1 <- glm(income ~ age + for_employer + weeks + work_class + occupation + education + m_stat + race + sex + citizenship, family=binomial(link='logit'), data = census_learn_clean)  
+summary(model_glm1)
+# occupation46                                                 NA       NA 
+# https://www.r-bloggers.com/learn-logistic-regression-and-beyond/
+# remove occupation
+model_glm2 <- glm(income ~ age + for_employer + weeks + work_class + education + m_stat + race + sex + citizenship, family=binomial(link='logit'), data = census_learn_clean)  
+summary(model_glm2)
+# remove work_class
+model_glm3 <- glm(income ~ age + for_employer + weeks + education + m_stat + race + sex + citizenship, family=binomial(link='logit'), data = census_learn_clean) 
+summary(model_glm3)
+predict_glm <- predict(model_glm3, census_learn_clean[, -41], type = 'response')
+predictions_glm <- ifelse(predict_glm >= 0.5, " 50000+.", " - 50000.") 
+sum(predictions_glm==as.character(census_learn_clean$income))/length(census_learn_clean$income)
+confusionMatrix(predictions_glm, as.character(census_learn_clean$income))
+# warning but a sensible answer
+```
+
+### Random forest
+```{r}
+set.seed(1906)
+model_rf <- randomForest(income ~ age + for_employer + weeks + education + m_stat + race + sex + citizenship, data= census_learn_clean)
+print(model_rf)
+predictions_rf <- predict(model_rf, census_learn_clean[, -41], type = 'class')
+confusionMatrix(predictions_rf, census_learn_clean$income)
+# warning but a sensible answer
+```
+## Making predictions
+I made predictions on the cleaned test dataset.
+```{r}
+# grep -v "?" census_income_test.csv > census_income_test_nomiss.csv
+
+census_test_clean <- read.csv("~/dataiku/us_census_full/census_income_test_nomiss.csv", header=F) 
+census_test_clean <- census_test_clean[, -25]
+colnames(census_test_clean) <- c('age', 'work_class', 'industry','occupation', 'education', 'wage_ph', 'enroll_edu', 'm_stat', 'industry_major', 'occupation_major', 'race', 'hispanic', 'sex', 'union_member', 'unemployment', 'employment_stat', 'capital_gains', 'capital_losses', 'dividends', 'tax_stat', 'ex_region', 'ex_state', 'household_stat', 'household_summary', 'change_msa', 'change_reg', 'within_reg', 'live_1ya', 'mig_sun', 'for_employer', 'family_und18', 'cob_dad', 'cob_mom', 'cob', 'citizenship', 'own_bus', 'veterans_quest', 'veterans_bnfts', 'weeks', 'year', 'income')
+sum(sapply(census_test_clean, is.factor))
+cont <- c(1, 6, 17, 18, 19, 30, 39)
+nominal <- (1:41)[-cont]
+census_test_clean[, nominal] <- lapply(census_test_clean[, nominal], as.factor)
+predictions_test <- predict(model_rf, census_test_clean[, -41], type = 'class')
+confusionMatrix(predictions_test, census_test_clean$income)
+```
