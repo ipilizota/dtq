@@ -95,7 +95,7 @@ tableplot(p, select=(length(census_learn)-length(census_learn)%%5 + 1):length(ce
 # grep -v "?" census_income_learn.csv > census_income_learn_nomiss.csv
 census_learn_clean <- read.csv("us_census_full/census_income_learn_nomiss.csv", header=F) 
 # fraction of the original dataset that remained
-length(census_learn_clean)/length(census_learn)
+dim(census_learn_clean)[1]/dim(census_learn)[1]
 summary(census_learn_clean)
 # V16 (employment_stat) and V41 (year) the same for all people in the dataset
 ```
@@ -254,7 +254,7 @@ I made predictions on the cleaned test dataset.
 ```{r}
 # grep -v "?" census_income_test.csv > census_income_test_nomiss.csv
 
-census_test_clean <- read.csv("~/dataiku/us_census_full/census_income_test_nomiss.csv", header=F) 
+census_test_clean <- read.csv("us_census_full/census_income_test_nomiss.csv", header=F) 
 census_test_clean <- census_test_clean[, -25]
 colnames(census_test_clean) <- c('age', 'work_class', 'industry','occupation', 'education', 'wage_ph', 'enroll_edu', 'm_stat', 'industry_major', 'occupation_major', 'race', 'hispanic', 'sex', 'union_member', 'unemployment', 'employment_stat', 'capital_gains', 'capital_losses', 'dividends', 'tax_stat', 'ex_region', 'ex_state', 'household_stat', 'household_summary', 'change_msa', 'change_reg', 'within_reg', 'live_1ya', 'mig_sun', 'for_employer', 'family_und18', 'cob_dad', 'cob_mom', 'cob', 'citizenship', 'own_bus', 'veterans_quest', 'veterans_bnfts', 'weeks', 'year', 'income')
 sum(sapply(census_test_clean, is.factor))
