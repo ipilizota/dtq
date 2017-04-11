@@ -1,5 +1,5 @@
 # US Census Assignment
-========================================================
+========================================================  
 Libraries and functions needed throughout the assignment
 ```{r message=FALSE}
 library("ggplot2")
